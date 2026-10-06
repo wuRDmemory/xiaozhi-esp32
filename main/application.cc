@@ -610,6 +610,21 @@ void Application::InitializeProtocol() {
 }
 
 void Application::ShowActivationCode(const std::string& code, const std::string& message) {
+    /* ==============================================================
+     * ⚠️ 本地补丁，非上游代码（板子 esp32-s3-cam-ics43434）
+     *
+     * 上游只把验证码交给**屏幕**和**语音播报**两条路。我们的板子既没有
+     * 屏幕也没有扬声器 —— 不补这一行，用户**永远拿不到这 6 位验证码**，
+     * 设备就永远激活不了。
+     *
+     * 放在函数最前面（而不是 Alert 之后），是为了即使后面播报/显示
+     * 出问题，验证码也已经打出来了。
+     *
+     * 将来若给板子配上屏幕或喇叭，这一行可以删掉。
+     * ============================================================== */
+    ESP_LOGW(TAG, "================ 激活码 / ACTIVATION CODE: %s ================",
+             code.c_str());
+
     struct digit_sound {
         char digit;
         const std::string_view& sound;
