@@ -23,7 +23,16 @@ Ics43434Codec::Ics43434Codec(int input_sample_rate, int output_sample_rate,
     input_sample_rate_ = input_sample_rate;
     output_sample_rate_ = output_sample_rate;
 
-    /* ---------------- 扬声器：I²S 口 0，只发不收 ---------------- */
+    /* ---------------- 扬声器：I²S 口 0，只发不收 ----------------
+     *
+     * ⚠️ 引脚为 NC 时**整个跳过**。本板 41/42/43 已让给 ST7789 屏幕，
+     *    若照旧初始化，I²S 外设会去驱动屏幕的 RST/DC/CS —— 屏幕直接花掉，
+     *    而且症状看起来像"屏幕坏了"，极难联想到是音频 codec 干的。
+     *    所以这里必须是显式分支，不能只把引脚写成 NC 就完事。 */
+    if (spk_bclk == GPIO_NUM_NC || spk_ws == GPIO_NUM_NC || spk_dout == GPIO_NUM_NC) {
+        ESP_LOGW(TAG, "扬声器引脚为 NC —— 跳过 TX 通道（本板无音频输出，见 config.h）");
+        tx_handle_ = nullptr;
+    } else {
     i2s_chan_config_t spk_chan_cfg = {
         .id = (i2s_port_t)0,
         .role = I2S_ROLE_MASTER,
@@ -68,6 +77,7 @@ Ics43434Codec::Ics43434Codec(int input_sample_rate, int output_sample_rate,
         },
     };
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_handle_, &spk_cfg));
+    }   /* ← 上面这块是扬声器初始化，引脚为 NC 时整块跳过 */
 
     /* ---------------- 麦克风：I²S 口 1，只收不发 ----------------
      *
@@ -166,6 +176,11 @@ int Ics43434Codec::Write(const int16_t* data, int samples) {
     if (samples <= 0) {
         return 0;
     }
+    /* 没有扬声器时直接丢弃 —— xiaozhi 会照常播提示音/回复，我们不拦，
+     * 只是无声。返回 samples 表示"已消费"，避免上层把它当失败重试。 */
+    if (tx_handle_ == nullptr) {
+        return samples;
+    }
 
     std::vector<int32_t> buffer(samples);
     /* output_volume_: 0-100 → volume_factor: 0-65536 */
@@ -204,10 +219,14 @@ void Ics43434Codec::EnableOutput(bool enable) {
     if (enable == output_enabled_) {
         return;
     }
-    if (enable) {
-        ESP_ERROR_CHECK(i2s_channel_enable(tx_handle_));
-    } else {
-        ESP_ERROR_CHECK(i2s_channel_disable(tx_handle_));
+    /* ⚠️ 必须挡在 i2s_channel_enable 之前：没有 TX 通道时传 nullptr 会崩。
+     * 仍调用基类，保持 output_enabled_ 状态一致（上层会读它）。 */
+    if (tx_handle_ != nullptr) {
+        if (enable) {
+            ESP_ERROR_CHECK(i2s_channel_enable(tx_handle_));
+        } else {
+            ESP_ERROR_CHECK(i2s_channel_disable(tx_handle_));
+        }
     }
     AudioCodec::EnableOutput(enable);
 }
